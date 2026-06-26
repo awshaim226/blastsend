@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<body>
+<h2>Checking your demo...</h2>
+<div id="out">Loading...</div>
+<script>
+fetch('https://blastsend-demo-live.vercel.app')
+  .then(r => r.text())
+  .then(html => {
+    const hasDemo = html.includes('DEMO MODE') || html.includes('Demo');
+    const hasBlast = html.includes('BlastSend');
+    document.getElementById('out').innerHTML = `
+      <p>✓ Site loads: ${html.length > 1000 ? 'YES' : 'NO'}</p>
+      <p>✓ Has BlastSend: ${hasBlast ? 'YES' : 'NO'}</p>
+      <p>✓ Has DEMO: ${hasDemo ? 'YES' : 'NO'}</p>
+      <p>Open the site directly and look for yellow banner at top</p>
+    `;
+  })
+  .catch(e => {
+    document.getElementById('out').innerHTML = 'Error: ' + e;
+  });
+</script>
+</body>
+</html>

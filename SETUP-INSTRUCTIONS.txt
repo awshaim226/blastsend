@@ -1,0 +1,51 @@
+BLASTSEND - COMPLETE SETUP INSTRUCTIONS
+========================================
+
+Your nonprofit SMS app is built and deployed!
+
+WHAT YOU HAVE:
+- Beautiful React app with navy/white/gold design
+- Dashboard, Contacts, Compose, and Settings pages
+- Works with Amazon SNS ($0.00645 per text)
+- Supabase database for contacts and scheduling
+
+NEXT STEPS (15 minutes):
+
+1. SUPABASE SETUP (5 min):
+   - Go to supabase.com, create free account
+   - Create new project
+   - Go to SQL Editor, paste contents of public/supabase-schema.sql
+   - Copy your Project URL and anon key from Settings > API
+
+2. AWS SETUP (5 min):
+   - Go to aws.amazon.com, create account
+   - Get Access Key ID and Secret from Security Credentials
+   - In AWS SNS, request "production access" for SMS
+
+3. DEPLOY EDGE FUNCTIONS (3 min):
+   - Install: npm install -g supabase
+   - Copy code from public/supabase-edge-function.ts to Supabase
+   - Copy code from public/scheduler-function.ts to Supabase
+   - Set up cron job to run every 5 minutes
+
+4. ADD ENVIRONMENT VARIABLES:
+   - In your hosting (Netlify/Vercel), add:
+     VITE_SUPABASE_URL=your_url
+     VITE_SUPABASE_ANON_KEY=your_key
+
+5. TEST:
+   - Sign up on your app
+   - Go to Settings, enter AWS keys
+   - Send test message to your phone
+
+FULL DETAILS: See README-BLASTSEND.md
+
+FILES INCLUDED:
+- Complete React app (src/App.tsx)
+- Supabase schema (public/supabase-schema.sql)
+- SMS sender function (public/supabase-edge-function.ts)
+- Scheduler function (public/scheduler-function.ts)
+- Full documentation (README-BLASTSEND.md)
+
+COST: $0.00645 per text. No monthly fees.
+Your $100 AWS free credit = ~15,500 free texts!
