@@ -1,7 +1,7 @@
 // Demo mode - works without Supabase or AWS
 // Stores everything in browser localStorage
 
-export const DEMO_MODE = true
+export const DEMO_MODE = false
 
 export interface DemoContact {
   id: string
