@@ -27,7 +27,7 @@ type Page = 'dashboard' | 'contacts' | 'compose' | 'settings'
 
 export default function App() {
   const [page, setPage] = useState<Page>('dashboard')
-  const [showDemoBanner, setShowDemoBanner] = useState(true)
+  const [showDemoBanner, setShowDemoBanner] = useState(DEMO_MODE)
 
   return (
     <div className="min-h-screen bg-[#fafafa]">
