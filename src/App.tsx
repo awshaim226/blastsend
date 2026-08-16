@@ -218,7 +218,7 @@ function ContactsPage({ userId }: { userId: string }) {
       let rawPhone = '', name = 'Contact'
       if (Array.isArray(row)) {
         // No-header format: try to find phone in any column
-        const phoneCol = row.find((v: any) => /^\+?[\d\s\-().]{7,}$/.test(String(v ?? '').trim()))
+        const phoneCol = row.find((v: any) => /^\+?[\d\s\-().]{7,}$/.test(String(v ?? '').trim()) || (typeof v === 'number' && String(v).replace(/\D/g,'').length >= 7))
         if (!phoneCol) { skipped++; continue }
         rawPhone = String(phoneCol).trim()
         // Name = join non-phone, non-empty columns
