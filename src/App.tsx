@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import Papa from 'papaparse'
+import * as XLSX from 'xlsx'
 import { supabase, type Contact, type Settings } from './lib/supabase'
 import { formatPhoneNumber } from './lib/sms'
 import type { Session } from '@supabase/supabase-js'
@@ -246,25 +247,43 @@ function ContactsPage({ userId }: { userId: string }) {
     if (!file) return
     setUploading(true)
     showToast('Uploading your contacts…')
-    Papa.parse(file, {
-      header: false,
-      complete: async (results) => {
-        const raw = results.data as any[]
-        if (!raw.length) { setUploading(false); return }
-        // Detect if first row is a header (contains words like "name", "phone", etc.)
-        const firstRow = raw[0] as any[]
+
+    const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls')
+
+    if (isExcel) {
+      const reader = new FileReader()
+      reader.onload = async (evt) => {
+        const data = new Uint8Array(evt.target!.result as ArrayBuffer)
+        const workbook = XLSX.read(data, { type: 'array' })
+        const sheet = workbook.Sheets[workbook.SheetNames[0]]
+        const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1 })
+        if (!rows.length) { setUploading(false); return }
+        const firstRow = rows[0]
         const isHeader = firstRow.some((v: any) => /name|phone|mobile|cell|first|last/i.test(String(v ?? '')))
         if (isHeader) {
-          // Re-parse with headers
-          Papa.parse(file, {
-            header: true,
-            complete: async (r2) => { await processRows(r2.data as any[]) }
-          })
+          const objRows = XLSX.utils.sheet_to_json(sheet)
+          await processRows(objRows)
         } else {
-          await processRows(raw)
+          await processRows(rows)
         }
       }
-    })
+      reader.readAsArrayBuffer(file)
+    } else {
+      Papa.parse(file, {
+        header: false,
+        complete: async (results) => {
+          const raw = results.data as any[]
+          if (!raw.length) { setUploading(false); return }
+          const firstRow = raw[0] as any[]
+          const isHeader = firstRow.some((v: any) => /name|phone|mobile|cell|first|last/i.test(String(v ?? '')))
+          if (isHeader) {
+            Papa.parse(file, { header: true, complete: async (r2) => { await processRows(r2.data as any[]) } })
+          } else {
+            await processRows(raw)
+          }
+        }
+      })
+    }
   }
 
   const remove = async (id: string) => {

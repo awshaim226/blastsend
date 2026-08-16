@@ -35,6 +35,11 @@ export type Settings = {
   user_id: string
   nonprofit_name: string
   sender_label: string
+  sms_provider: 'twilio' | 'aws'
+  twilio_account_sid: string
+  twilio_auth_token: string
+  twilio_from_number: string
+  twilio_whatsapp_number: string
   aws_access_key_id: string
   aws_secret_access_key: string
   aws_region: string
