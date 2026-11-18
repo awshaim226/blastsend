@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chesed Abot — SMS Updates Sign Up</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f7; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .card { background: white; border-radius: 20px; padding: 40px; max-width: 480px; width: 100%; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
+    .logo { text-align: center; margin-bottom: 28px; }
+    .logo h1 { font-size: 26px; font-weight: 700; color: #1a1a1a; }
+    .logo p { color: #666; margin-top: 6px; font-size: 15px; }
+    label { display: block; font-size: 14px; font-weight: 600; color: #333; margin-bottom: 6px; }
+    input[type="text"], input[type="tel"] { width: 100%; border: 1.5px solid #e0e0e0; border-radius: 12px; padding: 12px 16px; font-size: 15px; outline: none; transition: border-color 0.2s; margin-bottom: 18px; }
+    input:focus { border-color: #4f46e5; }
+    .checkbox-row { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 24px; background: #f8f8ff; border: 1.5px solid #e0e0ff; border-radius: 12px; padding: 14px; }
+    .checkbox-row input[type="checkbox"] { width: 20px; height: 20px; margin-top: 2px; flex-shrink: 0; accent-color: #4f46e5; cursor: pointer; }
+    .checkbox-row span { font-size: 13px; color: #444; line-height: 1.5; }
+    button { width: 100%; background: #4f46e5; color: white; border: none; border-radius: 12px; padding: 14px; font-size: 16px; font-weight: 700; cursor: pointer; transition: background 0.2s; }
+    button:hover { background: #4338ca; }
+    button:disabled { background: #a5a5a5; cursor: not-allowed; }
+    .success { display: none; text-align: center; padding: 24px 0; }
+    .success .checkmark { font-size: 56px; margin-bottom: 12px; }
+    .success h2 { font-size: 22px; font-weight: 700; color: #1a1a1a; margin-bottom: 8px; }
+    .success p { color: #666; font-size: 15px; }
+    .disclaimer { margin-top: 20px; font-size: 12px; color: #999; text-align: center; line-height: 1.5; }
+    .divider { border: none; border-top: 1px solid #eee; margin: 20px 0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">
+      <h1>🤝 Chesed Abot</h1>
+      <p>Sign up to receive SMS updates from our community</p>
+    </div>
+
+    <div id="form-section">
+      <label for="name">Full Name</label>
+      <input type="text" id="name" placeholder="Your name" />
+
+      <label for="phone">Mobile Phone Number</label>
+      <input type="tel" id="phone" placeholder="+1 (555) 000-0000" />
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="consent" />
+        <span id="consent-label">
+          By checking this box, I agree to receive recurring SMS text messages from <strong>Chesed Abot</strong> at the phone number provided. Messages may include fundraising raffle announcements, event reminders, and community updates. Message frequency varies. Message and data rates may apply. Reply <strong>STOP</strong> to opt out at any time. Reply <strong>HELP</strong> for help. Consent is not a condition of any purchase.
+        </span>
+      </div>
+
+      <button id="submit-btn" disabled onclick="handleSubmit()">Sign Up for SMS Updates</button>
+
+      <hr class="divider" />
+      <p class="disclaimer">
+        Chesed Abot | 1202 Ave U, Brooklyn, NY 11229<br />
+        501(c)(3) Nonprofit · EIN 33-3286049<br /><br />
+        By signing up, you agree to receive SMS messages from Chesed Abot.
+        You can opt out at any time by replying STOP.
+        For help, reply HELP or contact us at Info@chesedabot.com.
+      </p>
+    </div>
+
+    <div class="success" id="success-section">
+      <div class="checkmark">✅</div>
+      <h2>You're signed up!</h2>
+      <p>You'll receive SMS updates from Chesed Abot.<br />Reply STOP at any time to opt out.</p>
+    </div>
+  </div>
+
+  <script>
+    const checkbox = document.getElementById('consent')
+    const btn = document.getElementById('submit-btn')
+
+    checkbox.addEventListener('change', () => {
+      btn.disabled = !checkbox.checked
+    })
+
+    function handleSubmit() {
+      const name = document.getElementById('name').value.trim()
+      const phone = document.getElementById('phone').value.trim()
+      if (!phone) { alert('Please enter your phone number.'); return }
+      if (!checkbox.checked) { alert('Please check the consent box.'); return }
+      document.getElementById('form-section').style.display = 'none'
+      document.getElementById('success-section').style.display = 'block'
+    }
+  </script>
+</body>
+</html>

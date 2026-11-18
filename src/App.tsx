@@ -124,6 +124,7 @@ function MainApp({ userId, email }: { userId: string; email: string }) {
 // ─── Home Page ───────────────────────────────────────────────────────────────
 function HomePage({ userId, setPage }: { userId: string; setPage: (p: Page) => void }) {
   const [stats, setStats] = useState({ contacts: 0, sent: 0, spent: 0 })
+  const [balance, setBalance] = useState<string | null>(null)
 
   useEffect(() => {
     supabase.from('contacts').select('id', { count: 'exact' }).eq('user_id', userId).eq('opted_out', false)
@@ -136,6 +137,17 @@ function HomePage({ userId, setPage }: { userId: string; setPage: (p: Page) => v
           sent: d.reduce((a, b) => a + b.recipient_count, 0),
           spent: d.reduce((a, b) => a + b.cost, 0),
         }))
+      })
+    supabase.from('settings').select('twilio_account_sid, twilio_auth_token').eq('user_id', userId).single()
+      .then(async ({ data }) => {
+        if (!data?.twilio_account_sid || !data?.twilio_auth_token) return
+        try {
+          const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${data.twilio_account_sid}/Balance.json`, {
+            headers: { 'Authorization': 'Basic ' + btoa(`${data.twilio_account_sid}:${data.twilio_auth_token}`) }
+          })
+          const json = await res.json()
+          if (json.balance) setBalance(parseFloat(json.balance).toFixed(2))
+        } catch {}
       })
   }, [userId])
 
@@ -160,6 +172,23 @@ function HomePage({ userId, setPage }: { userId: string; setPage: (p: Page) => v
         <StatCard emoji="✉️" label="Texts Sent" value={stats.sent.toLocaleString()} color="bg-green-50 border-green-100" />
         <StatCard emoji="💰" label="Total Spent" value={`$${stats.spent.toFixed(2)}`} color="bg-purple-50 border-purple-100" />
       </div>
+
+      {/* Twilio Balance */}
+      {balance !== null && (
+        <div className={`flex items-center justify-between px-5 py-4 rounded-2xl border ${parseFloat(balance) < 80 ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">💳</span>
+            <div>
+              <p className="text-sm font-semibold text-gray-700">Twilio Balance</p>
+              <p className="text-xs text-gray-400">Used to send your text blasts</p>
+            </div>
+          </div>
+          <div className="text-right">
+            <p className={`text-2xl font-bold ${parseFloat(balance) < 80 ? 'text-red-600' : 'text-green-700'}`}>${balance}</p>
+            {parseFloat(balance) < 80 && <p className="text-xs text-red-400 font-medium">Low — top up soon</p>}
+          </div>
+        </div>
+      )}
 
       {/* Quick Actions */}
       <div className="grid grid-cols-2 gap-4">
@@ -200,10 +229,15 @@ function ContactsPage({ userId }: { userId: string }) {
   const [uploading, setUploading] = useState(false)
   const [toast, setToast] = useState('')
   const [search, setSearch] = useState('')
+  const [selectedGroup, setSelectedGroup] = useState('All')
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [listName, setListName] = useState('')
+  const [showNamePrompt, setShowNamePrompt] = useState(false)
+  const [pendingRows, setPendingRows] = useState<any[]>([])
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = async () => {
-    const { data } = await supabase.from('contacts').select('*').eq('user_id', userId).order('name')
+    const { data } = await supabase.from('contacts').select('*').eq('user_id', userId).order('name').range(0, 49999)
     setContacts(data || [])
     setLoading(false)
   }
@@ -212,17 +246,16 @@ function ContactsPage({ userId }: { userId: string }) {
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 4000) }
 
-  const processRows = async (rows: any[]) => {
+  const groups = ['All', ...Array.from(new Set(contacts.map(c => c.group_name).filter(Boolean)))]
+
+  const processRows = async (rows: any[], groupName: string) => {
     let added = 0, skipped = 0
     for (const row of rows) {
-      // Support objects with named keys (CSV with headers) or arrays (no-header Excel)
       let rawPhone = '', name = 'Contact'
       if (Array.isArray(row)) {
-        // No-header format: try to find phone in any column
         const phoneCol = row.find((v: any) => /^\+?[\d\s\-().]{7,}$/.test(String(v ?? '').trim()) || (typeof v === 'number' && String(v).replace(/\D/g,'').length >= 7))
         if (!phoneCol) { skipped++; continue }
         rawPhone = String(phoneCol).trim()
-        // Name = join non-phone, non-empty columns
         name = row.filter((v: any) => v && String(v).trim() !== rawPhone).map((v: any) => String(v).trim()).join(' ').trim() || 'Contact'
       } else {
         rawPhone = (row.phone || row.Phone || row.PHONE || row['Phone Number'] || row['Cell'] || row['Mobile'] || '').toString().trim()
@@ -232,27 +265,20 @@ function ContactsPage({ userId }: { userId: string }) {
       }
       if (!rawPhone) { skipped++; continue }
       const phone = formatPhoneNumber(rawPhone)
-      const group = Array.isArray(row) ? 'General' : (row.group || row.Group || row.GROUP || 'General').toString().trim()
-      const { error } = await supabase.from('contacts').upsert({ user_id: userId, name, phone, group_name: group, opted_out: false }, { onConflict: 'user_id,phone' })
+      const { error } = await supabase.from('contacts').upsert({ user_id: userId, name, phone, group_name: groupName, opted_out: false }, { onConflict: 'user_id,phone' })
       if (!error) added++
     }
-    showToast(`✅ Added ${added} contacts${skipped ? ` (${skipped} skipped — no phone number)` : ''}`)
+    showToast(`✅ Added ${added} contacts to "${groupName}"${skipped ? ` (${skipped} skipped)` : ''}`)
     setUploading(false)
     load()
     if (fileRef.current) fileRef.current.value = ''
   }
 
-  const uploadFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setUploading(true)
-    showToast('Uploading your contacts…')
-
+  const parseFile = (file: File, callback: (rows: any[]) => void) => {
     const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls')
-
     if (isExcel) {
       const reader = new FileReader()
-      reader.onload = async (evt) => {
+      reader.onload = (evt) => {
         const data = new Uint8Array(evt.target!.result as ArrayBuffer)
         const workbook = XLSX.read(data, { type: 'array' })
         const sheet = workbook.Sheets[workbook.SheetNames[0]]
@@ -260,46 +286,113 @@ function ContactsPage({ userId }: { userId: string }) {
         if (!rows.length) { setUploading(false); return }
         const firstRow = rows[0]
         const isHeader = firstRow.some((v: any) => /name|phone|mobile|cell|first|last/i.test(String(v ?? '')))
-        if (isHeader) {
-          const objRows = XLSX.utils.sheet_to_json(sheet)
-          await processRows(objRows)
-        } else {
-          await processRows(rows)
-        }
+        callback(isHeader ? XLSX.utils.sheet_to_json(sheet) : rows)
       }
       reader.readAsArrayBuffer(file)
     } else {
       Papa.parse(file, {
         header: false,
-        complete: async (results) => {
+        complete: (results) => {
           const raw = results.data as any[]
           if (!raw.length) { setUploading(false); return }
-          const firstRow = raw[0] as any[]
-          const isHeader = firstRow.some((v: any) => /name|phone|mobile|cell|first|last/i.test(String(v ?? '')))
+          const isHeader = (raw[0] as any[]).some((v: any) => /name|phone|mobile|cell|first|last/i.test(String(v ?? '')))
           if (isHeader) {
-            Papa.parse(file, { header: true, complete: async (r2) => { await processRows(r2.data as any[]) } })
+            Papa.parse(file, { header: true, complete: (r2) => callback(r2.data as any[]) })
           } else {
-            await processRows(raw)
+            callback(raw)
           }
         }
       })
     }
   }
 
-  const remove = async (id: string) => {
-    await supabase.from('contacts').delete().eq('id', id)
-    setContacts(c => c.filter(x => x.id !== id))
+  const uploadFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploading(true)
+    showToast('Reading file…')
+    const defaultName = file.name.replace(/\.[^/.]+$/, '')
+    parseFile(file, (rows) => {
+      setPendingRows(rows)
+      setListName(defaultName)
+      setShowNamePrompt(true)
+      setUploading(false)
+    })
   }
 
-  const filtered = contacts.filter(c =>
-    c.name.toLowerCase().includes(search.toLowerCase()) ||
-    c.phone.includes(search)
-  )
+  const confirmUpload = async () => {
+    const name = listName.trim() || 'General'
+    setShowNamePrompt(false)
+    setUploading(true)
+    await processRows(pendingRows, name)
+    setPendingRows([])
+  }
+
+  const removeSelected = async () => {
+    if (selected.size === 0) return
+    if (!confirm(`Delete ${selected.size} contacts?`)) return
+    await supabase.from('contacts').delete().in('id', Array.from(selected))
+    setContacts(c => c.filter(x => !selected.has(x.id)))
+    setSelected(new Set())
+    showToast(`🗑️ Deleted ${selected.size} contacts`)
+  }
+
+  const deleteList = async (groupName: string) => {
+    if (!confirm(`Delete all contacts in "${groupName}"?`)) return
+    await supabase.from('contacts').delete().eq('user_id', userId).eq('group_name', groupName)
+    load()
+    setSelectedGroup('All')
+    showToast(`🗑️ Deleted list "${groupName}"`)
+  }
+
+  const lastSelectedRef = useRef<string | null>(null)
+
+  const toggleSelect = (id: string, shiftHeld: boolean) => {
+    if (shiftHeld && lastSelectedRef.current) {
+      const ids = filtered.map(c => c.id)
+      const a = ids.indexOf(lastSelectedRef.current)
+      const b = ids.indexOf(id)
+      const [lo, hi] = a < b ? [a, b] : [b, a]
+      const rangeIds = ids.slice(lo, hi + 1)
+      setSelected(s => { const n = new Set(s); rangeIds.forEach(rid => n.add(rid)); return n })
+    } else {
+      setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+    }
+    lastSelectedRef.current = id
+  }
+
+  const toggleAll = () => {
+    if (selected.size === filtered.length) setSelected(new Set())
+    else setSelected(new Set(filtered.map(c => c.id)))
+  }
+
+  const filtered = contacts.filter(c => {
+    const matchGroup = selectedGroup === 'All' || c.group_name === selectedGroup
+    const matchSearch = c.name.toLowerCase().includes(search.toLowerCase()) || c.phone.includes(search)
+    return matchGroup && matchSearch
+  })
   const active = contacts.filter(c => !c.opted_out).length
 
   return (
     <div className="space-y-6">
       {toast && <Toast msg={toast} />}
+
+      {showNamePrompt && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl space-y-4">
+            <h2 className="font-bold text-lg text-gray-900">Name this list</h2>
+            <input value={listName} onChange={e => setListName(e.target.value)}
+              className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="e.g. Rosh Hashana List" autoFocus />
+            <div className="flex gap-3">
+              <button onClick={() => { setShowNamePrompt(false); setUploading(false) }}
+                className="flex-1 border border-gray-200 rounded-xl py-2.5 text-sm font-semibold text-gray-600 hover:bg-gray-50">Cancel</button>
+              <button onClick={confirmUpload}
+                className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl py-2.5 text-sm font-semibold">Upload</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="flex items-start justify-between">
         <div>
@@ -312,18 +405,40 @@ function ContactsPage({ userId }: { userId: string }) {
             {uploading ? '⏳ Uploading…' : '📂 Upload Excel / CSV'}
           </button>
           <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={uploadFile} />
-          <p className="text-xs text-gray-400 mt-1.5 text-center">Needs columns: name, phone</p>
         </div>
       </div>
 
+      {/* Lists / Groups */}
+      {groups.length > 1 && (
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 space-y-2">
+          <p className="font-semibold text-gray-900 text-sm mb-3">📋 Your Lists</p>
+          <div className="flex flex-wrap gap-2">
+            {groups.map(g => (
+              <div key={g} className="flex items-center gap-1">
+                <button onClick={() => setSelectedGroup(g)}
+                  className={`rounded-xl px-4 py-1.5 text-sm font-medium transition ${selectedGroup === g ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
+                  {g} {g !== 'All' && `(${contacts.filter(c => c.group_name === g).length})`}
+                </button>
+                {g !== 'All' && (
+                  <button onClick={() => deleteList(g)} className="text-gray-300 hover:text-red-400 transition text-sm px-1">🗑️</button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="px-5 py-4 border-b border-gray-100">
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-3">
+          <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="🔍 Search by name or phone…"
-            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
+            className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+          {selected.size > 0 && (
+            <button onClick={removeSelected}
+              className="bg-red-500 hover:bg-red-600 text-white text-sm font-semibold rounded-xl px-4 py-2 transition">
+              🗑️ Delete {selected.size}
+            </button>
+          )}
         </div>
 
         {loading ? (
@@ -335,25 +450,35 @@ function ContactsPage({ userId }: { userId: string }) {
             <p className="text-gray-400 text-sm mt-1">Upload a CSV or Excel file to get started</p>
           </div>
         ) : (
-          <div className="divide-y divide-gray-50">
-            {filtered.map(c => (
-              <div key={c.id} className="px-5 py-3.5 flex items-center justify-between hover:bg-gray-50 transition">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-semibold text-sm">
-                    {c.name.charAt(0).toUpperCase()}
+          <>
+            <div className="px-5 py-2 border-b border-gray-100 flex items-center gap-3">
+              <input type="checkbox" checked={selected.size === filtered.length && filtered.length > 0}
+                onChange={toggleAll} className="w-4 h-4 accent-indigo-600" />
+              <span className="text-xs text-gray-500">{selected.size > 0 ? `${selected.size} selected` : `Select all ${filtered.length}`}</span>
+            </div>
+            <div className="divide-y divide-gray-50">
+              {filtered.map(c => (
+                <div key={c.id} className={`px-5 py-3.5 flex items-center justify-between hover:bg-gray-50 transition ${selected.has(c.id) ? 'bg-indigo-50' : ''}`}>
+                  <div className="flex items-center gap-3">
+                    <input type="checkbox" checked={selected.has(c.id)} onChange={(e) => toggleSelect(c.id, e.nativeEvent instanceof MouseEvent && e.nativeEvent.shiftKey)}
+                      className="w-4 h-4 accent-indigo-600" />
+                    <div className="w-9 h-9 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-semibold text-sm">
+                      {c.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-900 text-sm">{c.name}</p>
+                      <p className="text-xs text-gray-400">{c.phone}{c.group_name ? ` · ${c.group_name}` : ''}</p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="font-medium text-gray-900 text-sm">{c.name}</p>
-                    <p className="text-xs text-gray-400">{c.phone}{c.group_name ? ` · ${c.group_name}` : ''}</p>
+                  <div className="flex items-center gap-3">
+                    {c.opted_out && <span className="text-xs bg-red-50 text-red-500 px-2 py-0.5 rounded-full">Opted out</span>}
+                    <button onClick={() => { supabase.from('contacts').delete().eq('id', c.id).then(() => setContacts(x => x.filter(y => y.id !== c.id))) }}
+                      className="text-gray-300 hover:text-red-400 transition text-lg">✕</button>
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  {c.opted_out && <span className="text-xs bg-red-50 text-red-500 px-2 py-0.5 rounded-full">Opted out</span>}
-                  <button onClick={() => remove(c.id)} className="text-gray-300 hover:text-red-400 transition text-lg">✕</button>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -370,17 +495,30 @@ function SendPage({ userId }: { userId: string }) {
   const [channel, setChannel] = useState<'sms' | 'whatsapp' | 'both'>('sms')
   const [sending, setSending] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [rangeFrom, setRangeFrom] = useState('')
+  const [rangeTo, setRangeTo] = useState('')
+  const [selectedList, setSelectedList] = useState('All')
 
   useEffect(() => {
-    supabase.from('contacts').select('*').eq('user_id', userId).eq('opted_out', false)
+    supabase.from('contacts').select('*').eq('user_id', userId).eq('opted_out', false).range(0, 49999)
       .then(({ data }) => setContacts(data || []))
     supabase.from('settings').select('*').eq('user_id', userId).single()
       .then(({ data }) => setSettings(data))
   }, [userId])
 
+  const lists = ['All', ...Array.from(new Set(contacts.map(c => c.group_name).filter(Boolean)))]
+
+  const listContacts = selectedList === 'All' ? contacts : contacts.filter(c => c.group_name === selectedList)
+
+  const selectedContacts = (() => {
+    const from = parseInt(rangeFrom) || 1
+    const to = parseInt(rangeTo) || listContacts.length
+    return listContacts.slice(from - 1, to)
+  })()
+
   const chars = message.length
   const segments = Math.max(1, Math.ceil(chars / 160))
-  const cost = (contacts.length * 0.00645 * segments).toFixed(2)
+  const cost = (selectedContacts.length * 0.00645 * segments).toFixed(2)
 
   const send = async () => {
     if (!message.trim()) { setResult({ ok: false, msg: 'Please type a message first.' }); return }
@@ -393,13 +531,13 @@ function SendPage({ userId }: { userId: string }) {
       await supabase.from('blasts').insert({
         user_id: userId,
         message,
-        recipient_count: contacts.length,
+        recipient_count: selectedContacts.length,
         cost: parseFloat(cost),
         status: 'scheduled',
         scheduled_at: new Date(scheduleDate).toISOString(),
         sent_at: null,
       })
-      setResult({ ok: true, msg: `✅ Scheduled! Will send to ${contacts.length} contacts on ${new Date(scheduleDate).toLocaleString()}` })
+      setResult({ ok: true, msg: `✅ Scheduled! Will send to ${selectedContacts.length} contacts on ${new Date(scheduleDate).toLocaleString()}` })
       setMessage('')
       return
     }
@@ -407,45 +545,54 @@ function SendPage({ userId }: { userId: string }) {
     setSending(true)
     setResult(null)
     try {
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-sms`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-        },
-        body: JSON.stringify({
-          message,
-          recipients: contacts.map(c => c.phone),
-          provider: settings!.sms_provider || 'aws',
-          twilio_account_sid: settings!.twilio_account_sid,
-          twilio_auth_token: settings!.twilio_auth_token,
-          twilio_from_number: settings!.twilio_from_number,
-          aws_access_key_id: settings!.aws_access_key_id,
-          aws_secret_access_key: settings!.aws_secret_access_key,
-          aws_region: settings!.aws_region || 'us-east-1',
-          sender_label: settings!.sender_label,
-        }),
-      })
-      const data = await res.json()
-      const ok = data.results?.filter((r: any) => r.success).length || 0
-      const failed = contacts.length - ok
-      const realCost = (ok * 0.00645 * segments).toFixed(2)
+      const phones = selectedContacts.map(c => c.phone)
+      const BATCH = 500
+      let totalOk = 0
+
+      for (let i = 0; i < phones.length; i += BATCH) {
+        const chunk = phones.slice(i, i + BATCH)
+        setResult({ ok: true, msg: `Sending… ${Math.min(i + BATCH, phones.length)} of ${phones.length}` })
+        const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-sms`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({
+            message,
+            recipients: chunk,
+            provider: settings!.sms_provider || 'aws',
+            twilio_account_sid: settings!.twilio_account_sid,
+            twilio_auth_token: settings!.twilio_auth_token,
+            twilio_from_number: settings!.twilio_from_number,
+            aws_access_key_id: settings!.aws_access_key_id,
+            aws_secret_access_key: settings!.aws_secret_access_key,
+            aws_region: settings!.aws_region || 'us-east-1',
+            sender_label: settings!.sender_label,
+          }),
+        })
+        const data = await res.json()
+        totalOk += data.results?.filter((r: any) => r.success).length || 0
+      }
+
+      const failed = selectedContacts.length - totalOk
+      const realCost = (totalOk * 0.00645 * segments).toFixed(2)
 
       await supabase.from('blasts').insert({
         user_id: userId,
         message,
-        recipient_count: ok,
+        recipient_count: totalOk,
         cost: parseFloat(realCost),
-        status: ok > 0 ? 'sent' : 'failed',
+        status: totalOk > 0 ? 'sent' : 'failed',
         sent_at: new Date().toISOString(),
         scheduled_at: null,
       })
 
-      setResult({ ok: ok > 0, msg: ok > 0
-        ? `✅ Sent to ${ok} people for $${realCost}!${failed > 0 ? ` (${failed} failed)` : ''}`
-        : `❌ All messages failed. Check your AWS keys in Settings.`
+      setResult({ ok: totalOk > 0, msg: totalOk > 0
+        ? `✅ Sent to ${totalOk} people for $${realCost}!${failed > 0 ? ` (${failed} failed)` : ''}`
+        : `❌ All messages failed. Check your Twilio credentials in Settings.`
       })
-      if (ok > 0) setMessage('')
+      if (totalOk > 0) setMessage('')
     } catch (err: any) {
       setResult({ ok: false, msg: `Error: ${err.message}` })
     }
@@ -475,6 +622,42 @@ function SendPage({ userId }: { userId: string }) {
         </div>
       </div>
 
+      {/* List Picker */}
+      {lists.length > 1 && (
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 space-y-3">
+          <p className="font-semibold text-gray-900">📋 Send to which list?</p>
+          <div className="flex flex-wrap gap-2">
+            {lists.map(l => (
+              <button key={l} onClick={() => { setSelectedList(l); setRangeFrom(''); setRangeTo('') }}
+                className={`rounded-xl px-4 py-1.5 text-sm font-medium transition ${selectedList === l ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
+                {l} ({l === 'All' ? contacts.length : contacts.filter(c => c.group_name === l).length})
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Contact Range */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 space-y-3">
+        <p className="font-semibold text-gray-900">👥 Contact Range <span className="text-gray-400 font-normal text-sm">(optional — leave blank to send to all {listContacts.length})</span></p>
+        <div className="flex gap-3 items-center">
+          <div className="flex-1">
+            <label className="block text-xs text-gray-500 mb-1">From contact #</label>
+            <input type="number" min={1} max={contacts.length} value={rangeFrom} onChange={e => setRangeFrom(e.target.value)}
+              placeholder="1"
+              className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+          </div>
+          <div className="text-gray-400 mt-5">→</div>
+          <div className="flex-1">
+            <label className="block text-xs text-gray-500 mb-1">To contact #</label>
+            <input type="number" min={1} max={contacts.length} value={rangeTo} onChange={e => setRangeTo(e.target.value)}
+              placeholder={String(contacts.length)}
+              className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+          </div>
+        </div>
+        <p className="text-sm text-indigo-600 font-medium">Sending to {selectedContacts.length} contacts</p>
+      </div>
+
       {/* Channel Selector */}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
         <p className="font-semibold text-gray-900 mb-3">📡 Send via</p>
@@ -495,7 +678,7 @@ function SendPage({ userId }: { userId: string }) {
         <div className="flex justify-between items-center">
           <div>
             <p className="font-semibold text-indigo-900">Ready to send</p>
-            <p className="text-indigo-600 text-sm mt-0.5">{contacts.length} contacts × $0.00645 per text</p>
+            <p className="text-indigo-600 text-sm mt-0.5">{selectedContacts.length} contacts × $0.00645 per text</p>
           </div>
           <div className="text-right">
             <p className="text-2xl font-bold text-indigo-700">${cost}</p>
@@ -536,21 +719,107 @@ function SendPage({ userId }: { userId: string }) {
       {/* Send Button */}
       <button onClick={send} disabled={sending || !message.trim()}
         className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl py-4 text-lg transition shadow-md hover:shadow-lg disabled:opacity-50">
-        {sending ? '⏳ Sending…' : scheduleMode ? `⏰ Schedule for ${contacts.length} people` : `📤 Send to ${contacts.length} people`}
+        {sending ? '⏳ Sending…' : scheduleMode ? `⏰ Schedule for ${selectedContacts.length} people` : `📤 Send to ${selectedContacts.length} people`}
       </button>
     </div>
   )
+}
+
+async function removeNonWorking(blast: any, userId: string, setBlasts: (fn: any) => void) {
+  const sid = blast.settings_twilio_account_sid || null
+  if (!confirm(`This will remove opted-out, landline, and invalid numbers from your contacts. Continue?`)) return
+
+  const { data: settings } = await supabase.from('settings').select('twilio_account_sid, twilio_auth_token').eq('user_id', userId).single()
+  if (!settings?.twilio_account_sid) return
+
+  const sentAt = new Date(blast.sent_at || blast.created_at)
+  const dateStr = sentAt.toISOString().split('T')[0]
+  const auth = btoa(`${settings.twilio_account_sid}:${settings.twilio_auth_token}`)
+
+  const badCodes = new Set([21610, 30006, 21211, 21614])
+  let badPhones: string[] = []
+  let url: string | null = `https://api.twilio.com/2010-04-01/Accounts/${settings.twilio_account_sid}/Messages.json?DateSent=${dateStr}&PageSize=1000`
+
+  while (url) {
+    const res: Response = await fetch(url, { headers: { 'Authorization': `Basic ${auth}` } })
+    const data: any = await res.json()
+    for (const m of data.messages || []) {
+      if (m.direction === 'inbound') continue
+      if (badCodes.has(m.error_code)) badPhones.push(m.to)
+    }
+    url = data.next_page_uri ? `https://api.twilio.com${data.next_page_uri}` : null
+  }
+
+  if (badPhones.length === 0) { alert('No non-working numbers found.'); return }
+
+  for (let i = 0; i < badPhones.length; i += 100) {
+    await supabase.from('contacts').delete().eq('user_id', userId).in('phone', badPhones.slice(i, i + 100))
+  }
+
+  setBlasts((bs: any[]) => bs.map(b => b.id === blast.id ? {
+    ...b, opted_out_count: 0, landline_count: 0, invalid_count: 0
+  } : b))
+
+  alert(`✅ Removed ${badPhones.length} non-working numbers from your contacts.`)
 }
 
 // ─── History Page ─────────────────────────────────────────────────────────────
 function HistoryPage({ userId }: { userId: string }) {
   const [blasts, setBlasts] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [fetching, setFetching] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     supabase.from('blasts').select('*').eq('user_id', userId).order('created_at', { ascending: false })
-      .then(({ data }) => { setBlasts(data || []); setLoading(false) })
+      .then(({ data }) => {
+        setBlasts(data || [])
+        setLoading(false)
+        const toFetch = (data || []).filter(b =>
+          b.status === 'sent' && !b.stats_fetched_at &&
+          new Date(b.sent_at || b.created_at) < new Date(Date.now() - 10 * 60 * 1000)
+        )
+        toFetch.forEach(b => fetchStats(b.id))
+      })
   }, [userId])
+
+  const fetchStats = async (blastId: string) => {
+    setFetching(f => new Set(f).add(blastId))
+    try {
+      const blast = blasts.find(b => b.id === blastId)
+      if (!blast) return
+      const { data: settings } = await supabase.from('settings').select('twilio_account_sid, twilio_auth_token, twilio_from_number').eq('user_id', userId).single()
+      if (!settings?.twilio_account_sid) return
+
+      const sentAt = new Date(blast.sent_at || blast.created_at)
+      const dateStr = sentAt.toISOString().split('T')[0]
+      const auth = btoa(`${settings.twilio_account_sid}:${settings.twilio_auth_token}`)
+
+      let allMessages: any[] = []
+      let url: string | null = `https://api.twilio.com/2010-04-01/Accounts/${settings.twilio_account_sid}/Messages.json?DateSent=${dateStr}&PageSize=1000&From=${encodeURIComponent(settings.twilio_from_number)}`
+      while (url) {
+        const res: Response = await fetch(url, { headers: { 'Authorization': `Basic ${auth}` } })
+        const data: any = await res.json()
+        allMessages = allMessages.concat(data.messages || [])
+        url = data.next_page_uri ? `https://api.twilio.com${data.next_page_uri}` : null
+      }
+
+      let delivered = 0, failed = 0, opted_out = 0, landline = 0, invalid = 0
+      for (const m of allMessages) {
+        if (m.direction === 'inbound') continue
+        if (m.status === 'delivered' || m.status === 'sent') delivered++
+        else if (m.error_code === 21610) opted_out++
+        else if (m.error_code === 30006) landline++
+        else if (m.error_code === 21211 || m.error_code === 21614) invalid++
+        else if (m.status === 'undelivered' || m.status === 'failed') failed++
+      }
+
+      await supabase.from('blasts').update({ delivered_count: delivered, failed_count: failed, opted_out_count: opted_out, landline_count: landline, invalid_count: invalid, stats_fetched_at: new Date().toISOString() }).eq('id', blastId)
+
+      setBlasts(bs => bs.map(b => b.id === blastId ? { ...b, delivered_count: delivered, failed_count: failed, opted_out_count: opted_out, landline_count: landline, invalid_count: invalid, stats_fetched_at: new Date().toISOString() } : b))
+    } finally {
+      setFetching(f => { const n = new Set(f); n.delete(blastId); return n })
+    }
+  }
 
   const cancelScheduled = async (id: string) => {
     await supabase.from('blasts').update({ status: 'cancelled' }).eq('id', id)
@@ -589,7 +858,7 @@ function HistoryPage({ userId }: { userId: string }) {
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-gray-800 line-clamp-2">{b.message}</p>
-                    <div className="flex items-center gap-3 mt-2">
+                    <div className="flex items-center gap-3 mt-2 flex-wrap">
                       <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${statusBadge(b.status)}`}>
                         {b.status}
                       </span>
@@ -602,6 +871,46 @@ function HistoryPage({ userId }: { userId: string }) {
                         <span className="text-xs text-gray-400">{b.recipient_count} people · ${b.cost?.toFixed(2)}</span>
                       )}
                     </div>
+
+                    {b.status === 'sent' && (
+                      <div className="mt-3">
+                        {fetching.has(b.id) ? (
+                          <p className="text-xs text-gray-400">Fetching delivery stats…</p>
+                        ) : b.stats_fetched_at ? (
+                          <>
+                            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 mt-1">
+                              <div className="bg-green-50 border border-green-100 rounded-xl px-3 py-2">
+                                <p className="text-xs text-green-600 font-medium">Delivered</p>
+                                <p className="text-lg font-semibold text-green-700">{(b.delivered_count || 0).toLocaleString()}</p>
+                              </div>
+                              <div className="bg-red-50 border border-red-100 rounded-xl px-3 py-2">
+                                <p className="text-xs text-red-500 font-medium">Failed</p>
+                                <p className="text-lg font-semibold text-red-600">{(b.failed_count || 0).toLocaleString()}</p>
+                              </div>
+                              <div className="bg-yellow-50 border border-yellow-100 rounded-xl px-3 py-2">
+                                <p className="text-xs text-yellow-600 font-medium">Opted out</p>
+                                <p className="text-lg font-semibold text-yellow-700">{(b.opted_out_count || 0).toLocaleString()}</p>
+                              </div>
+                              <div className="bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
+                                <p className="text-xs text-gray-500 font-medium">Landline / Invalid</p>
+                                <p className="text-lg font-semibold text-gray-600">{((b.landline_count || 0) + (b.invalid_count || 0)).toLocaleString()}</p>
+                              </div>
+                            </div>
+                            {((b.opted_out_count || 0) + (b.landline_count || 0) + (b.invalid_count || 0)) > 0 && (
+                              <button onClick={() => removeNonWorking(b, userId, setBlasts)}
+                                className="mt-2 text-xs text-red-400 hover:text-red-600 font-medium transition">
+                                🗑️ Remove {(b.opted_out_count || 0) + (b.landline_count || 0) + (b.invalid_count || 0)} non-working numbers from contacts
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <button onClick={() => fetchStats(b.id)}
+                            className="text-xs text-indigo-500 hover:text-indigo-700 font-medium transition">
+                            Check delivery stats →
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                   {b.status === 'scheduled' && (
                     <button onClick={() => cancelScheduled(b.id)}

@@ -25,3 +25,22 @@ dist-ssr
 .vite-source-tags.js
 .vercel
 .env
+# secrets
+.env
+.env.*
+!.env.example
+!.env.local.example
+*.pem
+rootkey*
+*secret*
+# environments / builds
+venv/
+.venv/
+node_modules/
+.next/
+dist/
+__pycache__/
+*.pyc
+.DS_Store
+*.tmp
+_to_delete/
